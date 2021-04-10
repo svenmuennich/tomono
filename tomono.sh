@@ -30,11 +30,11 @@ monorepo_dir="$PWD/$MONOREPO_NAME"
 
 # Silent pushd/popd
 pushd () {
-    command pushd "$@" > /dev/null
+	command pushd "$@" > /dev/null
 }
 
 popd () {
-    command popd "$@" > /dev/null
+	command popd "$@" > /dev/null
 }
 
 function read_repositories {
@@ -99,14 +99,16 @@ function create-mono {
 			return 1
 		fi
 
-                if [[ -z "$folder" ]]; then
+		if [[ -z "$folder" ]]; then
 			folder="$name"
-                fi
+		fi
+
+		remote_name="$name-origin"
 
 		echo "Merging in $repo.." >&2
-		git remote add "$name" "$repo"
-		echo "Fetching $name.." >&2 
-		git fetch -q "$name"
+		git remote add "$remote_name" "$repo"
+		echo "Fetching $remote_name.." >&2
+		git fetch -q "$remote_name"
 
 		# Now we've got all tags in .git/refs/tags: put them away for a sec
 		if [[ -n "$(ls .git/refs/tags)" ]]; then
@@ -115,28 +117,40 @@ function create-mono {
 
 		# Merge every branch from the sub repo into the mono repo, into a
 		# branch of the same name (create one if it doesn't exist).
-		remote-branches "$name" | while read branch; do
-			if git rev-parse -q --verify "$branch"; then
+		remote-branches "$remote_name" | while read source_branch; do
+			if [[ "$source_branch" == "master" ]]; then
+				destination_branch="$source_branch"
+			else
+				destination_branch="$name/$source_branch"
+			fi
+			echo "Merging branch $source_branch into $destination_branch.."
+			if git rev-parse -q --verify "$destination_branch"; then
 				# Branch already exists, just check it out (and clean up the working dir)
-				git checkout -q "$branch"
+				echo "Using existing branch $destination_branch.."
+				git checkout -q "$destination_branch"
 				git checkout -q -- .
 				git clean -f -d
 			else
-				# Create a fresh branch with an empty root commit"
-				git checkout -q --orphan "$branch"
+				# Create a fresh branch with an empty root commit
+				echo "Creating new branch $destination_branch.."
+				git checkout -q --orphan "$destination_branch"
 				# The ignore unmatch is necessary when this was a fresh repo
 				git rm -rfq --ignore-unmatch .
-				git commit -q --allow-empty -m "Root commit for $branch branch"
+				if [[ "$destination_branch" == "master" ]]; then
+					git commit -q --allow-empty -m "Initial commit"
+				fi
 			fi
-			git merge -q --no-commit -s ours "$name/$branch" --allow-unrelated-histories
-			git read-tree --prefix="$folder/" "$name/$branch"
-			git commit -q --no-verify --allow-empty -m "Merging $name to $branch"
+			git merge -q --no-commit -s ours "$remote_name/$source_branch" --allow-unrelated-histories
+			git read-tree --prefix="$folder/" "$remote_name/$source_branch"
+			git commit -q --no-verify --allow-empty -m "Integrate \`$name\`"
 		done
 	done
 
-	# Restore all namespaced tags
+	# Move all namespaced tags
 	rm -rf .git/refs/tags
-	mv .git/refs/namespaced-tags .git/refs/tags
+	mkdir -p .git/refs/tags
+	find .git/refs/namespaced-tags -type f -exec bash -c 'mv {} ".git/refs/tags/$(basename $(dirname {}))-$(echo $(basename {}) | sed -r s/v?\([^v]+\)/\\\1/)"' \;
+	rm -rf .git/refs/namespaced-tags
 
 	git checkout -q master
 	git checkout -q .
